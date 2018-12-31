@@ -4,16 +4,21 @@
 
 #include <keyboard.h>
 #include <interrupt.h>
-#include <keymap.h>
-#include <video.h>
+#include "video.h"
+#include "kernel.h"
+#include "printk.h"
 
 /*
  * 说明：注册键盘中断处理函数
  */
 static KB_INPUT kb_in;
 
-void init_keyboard()
+void init_keyboard(void)
 {
+	wait_keyboard();
+	io_out8(0x64, 0x60);
+	wait_keyboard();
+	io_out8(0x60, 0x47);
 	kb_in.count = 0;
 	kb_in.p_head = kb_in.p_tail = kb_in.buf;
 	register_interrupt_handler(IRQ1,keyboard_handler);
@@ -37,11 +42,9 @@ void keyboard_handler(pt_regs *regs)
 
 	}
 	kb_in.count++;
-	//printk("0x%02X,",scancode);
-
 }
 
-void keyboard_read()
+int keyboard_read(void)
 {
 	unsigned char scancode;
     io_cli();
@@ -54,8 +57,19 @@ void keyboard_read()
 			kb_in.p_tail = kb_in.buf;
 		}
 		kb_in.count = kb_in.count - 2;
-		boxfill8((unsigned char *) 0xa0000, 320, COL8_848484, 8, 24, 321, 40); //clean last char
-        showString((unsigned char *) 0xa0000, 320, 8, 24, COL8_FFFFFF, "key pressed");
+		io_sti();
+		return scancode;
 	}
     io_sti();
+	return -1;
+}
+
+void wait_keyboard(void) {
+	/* 等待键盘控制电路准备完毕 */
+	for (;;) {
+		if ((io_in8(0x64) & 0x02) == 0) {
+			break;
+		}
+	}
+	return;
 }

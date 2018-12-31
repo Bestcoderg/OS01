@@ -1,10 +1,17 @@
 #include "mouse.h"
 #include "video.h"
 
+static MS_INPUT ms_in;
+static MOUSE_DEC mdec;
+
+int mouse_bytes [3];
+int mouse_cycle = 0;
+int x = 0;
+int y = 0;
+
 /**
  * 鼠标中断注册
  */
- 
  void init_mouse()
 {
     mouse_wait(1);
@@ -20,10 +27,12 @@
     io_out8(0x60,status_byte);
     //设置默认值
     mouse_write(0xF6);
-    //mouse_read();
+    io_in8(0x60);
     //开始发送数据包
     mouse_write(0xF4);
-    //mouse_read();
+    io_in8(0x60);
+    ms_in.count = 0;
+    ms_in.p_head = ms_in.p_tail = ms_in.buf;
     register_interrupt_handler(IRQ12, mouse_handler);
 }
 
@@ -32,10 +41,16 @@
  */
 void mouse_handler(pt_regs *regs)
 {
-    unsigned char data;
-    data = io_in8(0x60);
-    boxfill8((unsigned char *) 0xa0000, 320, COL8_848484, 8, 8, 321, 40); //clean last char
-    showString((unsigned char*) 0xa0000, 320, 8, 8, COL8_FFFFFF, &data);
+    int data = io_in8(0x60);
+    if(ms_in.count < 128) {
+        *(ms_in.p_head) = data;
+        ms_in.p_head++;
+        if(ms_in.p_head == ms_in.buf+128)
+        {
+            ms_in.p_head = ms_in.buf;
+        }
+    }
+    ms_in.count++;
 }
 
 void mouse_wait(int a_type)
@@ -74,8 +89,68 @@ void mouse_write(unsigned char a_write)
     io_out8(0x60,a_write);
 }
 
-void mouse_read()
+int mouse_read()
 {
-    //从鼠标获取响应
-    mouse_wait(0);
+    char data;
+    io_cli();
+	if(ms_in.count > 0){
+		data = *(ms_in.p_tail);
+        ms_in.p_tail++;
+		// 如果读到了最后
+		if(ms_in.p_tail == ms_in.buf + 128){
+			ms_in.p_tail = ms_in.buf;
+		}
+		ms_in.count = ms_in.count - 1;
+        io_sti();
+        return data;
+	}
+    io_sti();
+    return -1;
+}
+
+int mouse_decode(struct MOUSE_DEC *mdec, unsigned char dat){
+	if (mdec->phase == 0) {
+		/* 等待鼠标的0xfa的阶段 */
+		if (dat == 0xfa) {
+			mdec->phase = 1;
+		}        
+		return 0;
+	}
+	if (mdec->phase == 1) {
+		/* 等待鼠标第一字节的阶段 */
+		mdec->buf[0] = dat;
+		mdec->phase = 2;
+		return 0;
+	}
+	if (mdec->phase == 2) {
+		/* 等待鼠标第二字节的阶段 */
+		mdec->buf[1] = dat;
+		mdec->phase = 3;
+		return 0;
+	}
+	if (mdec->phase == 3) {
+		/* 等待鼠标第二字节的阶段 */
+		mdec->buf[2] = dat;
+		mdec->phase = 1;
+		mdec->btn = mdec->buf[0] & 0x07;
+		mdec->x = mdec->buf[1];
+		mdec->y = mdec->buf[2];
+		if ((mdec->buf[0] & 0x10) != 0) {
+			mdec->x |= 0xffffff00;
+		}
+		if ((mdec->buf[0] & 0x20) != 0) {
+			mdec->y |= 0xffffff00;
+		}     
+		/* 鼠标的y方向与画面符号相反 */   
+		mdec->y = - mdec->y;
+        if(mdec->x < 0) mdec->x = -2;
+        else if(mdec->x == 0) mdec->x = 0;
+        else mdec->x = 2;
+        if(mdec->y < 0) mdec->y = -2;
+        else if(mdec->y == 0) mdec->y = 0;
+        else mdec->y = 2;
+		return 1;
+	}
+	/* 应该不可能到这里来 */
+	return -1; 
 }
